@@ -1,22 +1,30 @@
-name: Android Cloud Build Engine
+name: Android Unified Cloud Build Engine
+
 on: [push, workflow_dispatch]
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Java 17
+      
+      - name: Setup Java 17 Runtime
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
-      - name: Auto-Accept Licenses
-        run: yes | sdkmanager --licenses || true
-      - name: Build Android App Debug APK
+      
+      - name: Force Clean Setup of Wrapper
+        run: |
+          yes | sdkmanager --licenses || true
+          gradle wrapper --gradle-version 8.4 --distribution-type bin
+
+      - name: Compile and Build Debug APK File
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
-      - name: Upload Artifact
+
+      - name: Upload Final Downloadable APK File
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Voice-Assistant-APK
