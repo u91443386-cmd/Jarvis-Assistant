@@ -1,31 +1,31 @@
-name: Android Unified Cloud Build Engine
+name: Secure Automated App Builder
 
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  assemble_package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Fetch Source Code Assets
+        uses: actions/checkout@v4
       
-      - name: Setup Java 17 Runtime
+      - name: Initialize Java 17 Runtime environment
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
       
-      # Bina kisi local jar ke direct machine par gradle engine download aur initialization karna
-      - name: Setup Fresh Gradle Wrapper Engine
+      - name: Initialize Sandboxed Build Engine
         run: |
           yes | sdkmanager --licenses || true
           gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-      - name: Compile and Build Debug APK File
+      - name: Execute Binary Application Packaging
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload Final Downloadable APK File
+      - name: Securely Export Target Application Package
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Voice-Assistant-APK
