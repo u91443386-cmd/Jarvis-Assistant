@@ -14,14 +14,30 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
       
-      - name: Force Clean Setup of Wrapper
+      # Direct stable 8.4 tool set karna bina automatic cloud system loop ke
+      - name: Inject Sealed Gradle Engine
         run: |
           yes | sdkmanager --licenses || true
-          gradle wrapper --gradle-version 8.4 --distribution-type bin
+          mkdir -p gradle/wrapper
+          echo "distributionBase=GRADLE_USER_HOME" > gradle/wrapper/gradle-wrapper.properties
+          echo "distributionPath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
+          echo "distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip" >> gradle/wrapper/gradle-wrapper.properties
+          echo "zipStoreBase=GRADLE_USER_HOME" >> gradle/wrapper/gradle-wrapper.properties
+          echo "zipStorePath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
+          
+          # Custom wrapper injection template
+          cat << 'EOF' > gradlew
+          #!/usr/bin/env sh
+          APP_BASE_NAME=${0##*/}
+          APP_HOME=$(dirname "$0")
+          [ -n "$CLASSPATH" ] || CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+          export CLASSPATH
+          exec java org.gradle.wrapper.GradleWrapperMain "$@"
+          EOF
+          chmod +x gradlew
 
       - name: Compile and Build Debug APK File
         run: |
-          chmod +x gradlew
           ./gradlew assembleDebug
 
       - name: Upload Final Downloadable APK File
