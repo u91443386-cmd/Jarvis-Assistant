@@ -1,0 +1,22 @@
+workflows:
+  android-debug-build:
+    name: Jarvis Native Android Builder
+    max_build_duration: 15
+    instance_type: mac_mini_m1
+    environment:
+      groups:
+        - sandbox_env
+      vars:
+        PACKAGE_NAME: "com.jarvis.voiceassistant"
+      java: 17
+    scripts:
+      - name: Force Locked Wrapper Synchronization
+        script: |
+          yes | sdkmanager --licenses || true
+          gradle wrapper --gradle-version 8.4 --distribution-type bin
+          chmod +x gradlew
+      - name: Execute Android APK Packaging
+        script: |
+          ./gradlew assembleDebug
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk
