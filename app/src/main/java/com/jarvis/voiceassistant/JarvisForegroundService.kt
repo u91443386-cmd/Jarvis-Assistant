@@ -3,7 +3,9 @@ package com.jarvis.voiceassistant
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -17,9 +19,12 @@ class JarvisForegroundService : Service() {
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var recognizerIntent: Intent? = null
+    private var audioManager: AudioManager? = null
 
     override fun onCreate() {
         super.onCreate()
+        // Audio Manager set kiya taaki beep sound band kar sakein
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         startMyForeground()
         startListening()
     }
@@ -39,20 +44,27 @@ class JarvisForegroundService : Service() {
     }
 
     private fun startListening() {
+        // Mic start hone se pehle system aawaz MUTE kar do taaki Beep na baje
+        audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN") 
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
         }
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onReadyForSpeech(params: Bundle?) {
+                // Jaise hi sunna shuru ho jaye, aawaz wapas UNMUTE kar do
+                audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+            }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
-                speechRecognizer?.startListening(recognizerIntent)
+                speechRecognizer?.destroy()
+                startListening() // Restart loop
             }
 
             override fun onResults(results: Bundle?) {
@@ -62,7 +74,8 @@ class JarvisForegroundService : Service() {
                     Log.d("Jarvis", "Command Heard: $command")
                     processCommand(command)
                 }
-                speechRecognizer?.startListening(recognizerIntent)
+                speechRecognizer?.destroy()
+                startListening() // Restart loop
             }
             override fun onPartialResults(partialResults: Bundle?) {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -72,12 +85,10 @@ class JarvisForegroundService : Service() {
     }
 
     private fun processCommand(command: String) {
-        // 1. SMART APP OPENER - Kisi bhi app ka naam dhoondh kar kholega
         if (command.startsWith("open ")) {
             val appName = command.replace("open ", "").trim()
             openAppByName(appName)
         } 
-        // 2. SCREEN CONTROL
         else if (command.contains("scroll down") || command.contains("scroll up") || command.contains("go back") || command.contains("home")) {
             val intent = Intent("JARVIS_ACTION")
             intent.putExtra("command", command)
@@ -87,6 +98,7 @@ class JarvisForegroundService : Service() {
 
     private fun openAppByName(appName: String) {
         val pm = packageManager
+        // QUERY_ALL_PACKAGES permission ke baad ye line properly saare apps dhoondhegi
         val packages = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
         
         for (packageInfo in packages) {
@@ -100,10 +112,11 @@ class JarvisForegroundService : Service() {
                 }
             }
         }
-        Log.d("Jarvis", "App nahi mila: $appName")
     }
 
     override fun onDestroy() {
+        // App band hone par sure karein ki volume unmute rahe
+        audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
         speechRecognizer?.destroy()
         super.onDestroy()
     }
