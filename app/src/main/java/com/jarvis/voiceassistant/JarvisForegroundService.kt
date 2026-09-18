@@ -2,7 +2,6 @@ package com.jarvis.voiceassistant
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
@@ -43,7 +42,7 @@ class JarvisForegroundService : Service() {
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN") // Aap "hi-IN" bhi kar sakte hain
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN") 
         }
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
@@ -53,7 +52,6 @@ class JarvisForegroundService : Service() {
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
-                // Agar aawaz nahi aayi ya timeout hua, toh dobara sunna shuru karein
                 speechRecognizer?.startListening(recognizerIntent)
             }
 
@@ -64,7 +62,6 @@ class JarvisForegroundService : Service() {
                     Log.d("Jarvis", "Command Heard: $command")
                     processCommand(command)
                 }
-                // Ek command sunne ke baad lagatar sunte rehne ke liye loop
                 speechRecognizer?.startListening(recognizerIntent)
             }
             override fun onPartialResults(partialResults: Bundle?) {}
@@ -75,23 +72,35 @@ class JarvisForegroundService : Service() {
     }
 
     private fun processCommand(command: String) {
-        // 1. App Open Karne Ka System
-        if (command.contains("open youtube")) {
-            val intent = packageManager.getLaunchIntentForPackage("com.google.android.youtube")
-            intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+        // 1. SMART APP OPENER - Kisi bhi app ka naam dhoondh kar kholega
+        if (command.startsWith("open ")) {
+            val appName = command.replace("open ", "").trim()
+            openAppByName(appName)
         } 
-        else if (command.contains("open whatsapp")) {
-            val intent = packageManager.getLaunchIntentForPackage("com.whatsapp")
-            intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-        }
-        // 2. Screen Control (Scroll/Back) Ke Liye Accessibility Ko Signal Bhejna
-        else if (command.contains("scroll down") || command.contains("go back") || command.contains("home")) {
+        // 2. SCREEN CONTROL
+        else if (command.contains("scroll down") || command.contains("scroll up") || command.contains("go back") || command.contains("home")) {
             val intent = Intent("JARVIS_ACTION")
             intent.putExtra("command", command)
             sendBroadcast(intent)
         }
+    }
+
+    private fun openAppByName(appName: String) {
+        val pm = packageManager
+        val packages = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
+        
+        for (packageInfo in packages) {
+            val name = pm.getApplicationLabel(packageInfo).toString().lowercase()
+            if (name.contains(appName)) {
+                val intent = pm.getLaunchIntentForPackage(packageInfo.packageName)
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    return 
+                }
+            }
+        }
+        Log.d("Jarvis", "App nahi mila: $appName")
     }
 
     override fun onDestroy() {
