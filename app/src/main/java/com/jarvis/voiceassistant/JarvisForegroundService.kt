@@ -14,10 +14,10 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import org.json.JSONObject
-import org.vosk.LogLevel
+
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.VoskLog
+
 import java.io.File
 import java.io.FileOutputStream
 
@@ -132,7 +132,7 @@ class JarvisForegroundService : Service() {
                 copyAssetFolder(this, "model", modelDir)
             }
 
-            VoskLog.setLogLevel(LogLevel.WARNINGS)
+            
             model = Model(modelDir.absolutePath)
             recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
 
