@@ -281,7 +281,11 @@ class JarvisAccessibilityService : AccessibilityService() {
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
-
+            // Ignore Voice Search and Mic buttons
+    if (desc.contains("voice") || desc.contains("mic") || viewId.contains("voice") || viewId.contains("mic")) {
+        return false
+    }
+    
         // Text or content description mentions search
         if (text.contains("search") || desc.contains("search")) return true
 
