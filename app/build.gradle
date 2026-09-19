@@ -1,12 +1,52 @@
-plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
 android {
     namespace 'com.jarvis.voiceassistant'
     compileSdk 34
-    defaultConfig { applicationId "com.jarvis.voiceassistant"; minSdk 26; targetSdk 34; versionCode 1; versionName "1.0" }
-    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    kotlinOptions { jvmTarget = '17' }
+
+    defaultConfig {
+        applicationId "com.jarvis.voiceassistant"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    packagingOptions {
+        exclude 'META-INF/INDEX.LIST'
+        exclude 'META-INF/DEPENDENCIES'
+        // Vosk native libs may contain duplicate .so files
+        pickFirst 'lib/**/*.so'
+    }
 }
+
 dependencies {
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+
+    // Vosk offline speech recognition
+    implementation 'com.alphacephei:vosk-android:0.3.47'
+
+    // Coroutines (optional but used in some updaters)
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 }
