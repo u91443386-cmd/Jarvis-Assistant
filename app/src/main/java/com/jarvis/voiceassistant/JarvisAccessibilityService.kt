@@ -14,12 +14,12 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.content.ContextCompat
 
 class JarvisAccessibilityService : AccessibilityService() {
-
     companion object {
         private const val TAG = "JarvisAccessibility"
 
         // Common package names for launching apps by voice
         private val APP_PACKAGES = mapOf(
+            // Original DeepSeek List
             "instagram" to "com.instagram.android",
             "youtube" to "com.google.android.youtube",
             "whatsapp" to "com.whatsapp",
@@ -29,7 +29,47 @@ class JarvisAccessibilityService : AccessibilityService() {
             "chrome" to "com.android.chrome",
             "settings" to "com.android.settings",
             "spotify" to "com.spotify.music",
-            "telegram" to "org.telegram.messenger"
+            "telegram" to "org.telegram.messenger",
+            
+            // Your Custom Apps from Screenshots (Batch 1 & 2)
+            "bgmi" to "com.pubg.imobile",
+            "free fire max" to "com.dts.freefiremax",
+            "zomato" to "com.application.zomato",
+            "swiggy" to "in.swiggy.android",
+            "dominos" to "com.Dominos",
+            "amazon" to "in.amazon.mShop.android.shopping",
+            "blinkit" to "com.grofers.customerapp",
+            "cashkaro" to "com.cashkaro",
+            "truecaller" to "com.truecaller",
+            "termux" to "com.termux",
+            "wps office" to "cn.wps.moffice_eng",
+            "where is my train" to "com.whereismytrain.android",
+            "youtube music" to "com.google.android.apps.youtube.music",
+            "photos" to "com.google.android.apps.photos",
+            "gallery" to "com.miui.gallery",
+            "camera" to "com.android.camera",
+            "calculator" to "com.miui.calculator",
+            "calendar" to "com.android.calendar",
+            "drive" to "com.google.android.apps.docs",
+            "files" to "com.google.android.apps.nbu.files",
+            "file manager" to "com.mi.android.globalFileexplorer",
+            "roblox" to "com.roblox.client",
+            "phonepe" to "com.phonepe.app",
+            "opera" to "com.opera.browser",
+            "onedrive" to "com.microsoft.skydrive",
+            "netflix" to "com.netflix.mediaclient",
+            "myntra" to "com.myntra.android",
+            "myjio" to "com.jio.myjio",
+            "lenskart" to "com.lenskart.app",
+            "maps" to "com.google.android.apps.maps",
+            "meet" to "com.google.android.apps.tachyon",
+            "messages" to "com.google.android.apps.messaging",
+            "hdfc" to "com.snapwork.hdfc",
+            "hotstar" to "in.startv.hotstar",
+            "gemini" to "com.google.android.apps.bard",
+            "gmail" to "com.google.android.gm",
+            "play store" to "com.android.vending",
+            "gpay" to "com.google.android.apps.nbu.paisa.user"
         )
 
         // Substrings commonly present in search icon/bar resource IDs
@@ -38,6 +78,8 @@ class JarvisAccessibilityService : AccessibilityService() {
             "search_box", "search_edit_text"
         )
     }
+    
+    
 
     private val handler = Handler(Looper.getMainLooper())
 
