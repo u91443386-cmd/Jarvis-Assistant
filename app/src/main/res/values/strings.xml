@@ -1,1 +1,5 @@
-<resources><string name="app_name">Jarvis</string></resources>
+<resources>
+    <string name="app_name">Jarvis</string>
+    <string name="accessibility_service_label">Jarvis Accessibility</string>
+    <string name="accessibility_service_description">Allows Jarvis to tap search bars and type text in other apps.</string>
+</resources>
