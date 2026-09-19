@@ -12,7 +12,7 @@ import android.os.IBinder
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 
 class JarvisForegroundService : Service() {
@@ -23,7 +23,6 @@ class JarvisForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        // Audio Manager set kiya taaki beep sound band kar sakein
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         startMyForeground()
         startListening()
@@ -44,7 +43,6 @@ class JarvisForegroundService : Service() {
     }
 
     private fun startListening() {
-        // Mic start hone se pehle system aawaz MUTE kar do taaki Beep na baje
         audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
 
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
@@ -55,7 +53,6 @@ class JarvisForegroundService : Service() {
 
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
-                // Jaise hi sunna shuru ho jaye, aawaz wapas UNMUTE kar do
                 audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
             }
             override fun onBeginningOfSpeech() {}
@@ -64,18 +61,21 @@ class JarvisForegroundService : Service() {
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
                 speechRecognizer?.destroy()
-                startListening() // Restart loop
+                startListening()
             }
 
             override fun onResults(results: Bundle?) {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (!matches.isNullOrEmpty()) {
-                    val command = matches[0].lowercase()
-                    Log.d("Jarvis", "Command Heard: $command")
+                    val command = matches[0].lowercase().trim()
+                    
+                    // Ye line screen par dikhayegi ki Jarvis ne kya suna
+                    Toast.makeText(applicationContext, "Heard: $command", Toast.LENGTH_SHORT).show()
+                    
                     processCommand(command)
                 }
                 speechRecognizer?.destroy()
-                startListening() // Restart loop
+                startListening()
             }
             override fun onPartialResults(partialResults: Bundle?) {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -91,6 +91,8 @@ class JarvisForegroundService : Service() {
         } 
         else if (command.contains("scroll down") || command.contains("scroll up") || command.contains("go back") || command.contains("home")) {
             val intent = Intent("JARVIS_ACTION")
+            // 🔥 Ye line add ki hai taaki Background se Accessibility ko signal mil sake
+            intent.setPackage(packageName) 
             intent.putExtra("command", command)
             sendBroadcast(intent)
         }
@@ -98,7 +100,6 @@ class JarvisForegroundService : Service() {
 
     private fun openAppByName(appName: String) {
         val pm = packageManager
-        // QUERY_ALL_PACKAGES permission ke baad ye line properly saare apps dhoondhegi
         val packages = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
         
         for (packageInfo in packages) {
@@ -107,7 +108,11 @@ class JarvisForegroundService : Service() {
                 val intent = pm.getLaunchIntentForPackage(packageInfo.packageName)
                 if (intent != null) {
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
+                    try {
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(applicationContext, "App open block hua!", Toast.LENGTH_SHORT).show()
+                    }
                     return 
                 }
             }
@@ -115,7 +120,6 @@ class JarvisForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        // App band hone par sure karein ki volume unmute rahe
         audioManager?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
         speechRecognizer?.destroy()
         super.onDestroy()
