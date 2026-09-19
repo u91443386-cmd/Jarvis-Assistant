@@ -5,5 +5,5 @@
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
-    android:description="Jarvis Smart Accessibility Service for Auto-Search and Typing"
+    android:description="@string/app_name"
     android:notificationTimeout="100" />
