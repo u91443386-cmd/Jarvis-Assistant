@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="@string/app_name"
-    android:accessibilityEventTypes="typeAllMask"
-    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagRequestFilterKeyEvents"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:notificationTimeout="100"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
     android:canRetrieveWindowContent="true"
-    android:canPerformGestures="true" />
+    android:canPerformGestures="true"
+    android:description="Jarvis Smart Accessibility Service for Auto-Search and Typing"
+    android:notificationTimeout="100" />
