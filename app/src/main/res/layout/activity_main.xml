@@ -3,29 +3,37 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:gravity="center"
-    android:padding="20dp">
+    android:padding="24dp"
+    android:gravity="center_horizontal">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Jarvis Voice Assistant"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="40dp"/>
 
     <Button
-        android:id="@+id/btnAccessibility"
+        android:id="@+id/btn_accessibility"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="1. Allow Accessibility"
         android:layout_marginBottom="16dp"/>
 
     <Button
-        android:id="@+id/btnStartService"
+        android:id="@+id/btn_start"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="2. Start Jarvis Engine"
+        android:text="2. Start Vosk Engine"
         android:layout_marginBottom="16dp"/>
 
     <Button
-        android:id="@+id/btnStopService"
+        android:id="@+id/btn_stop"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="3. Stop Jarvis Engine"
-        android:backgroundTint="@android:color/holo_red_dark"
-        android:textColor="@android:color/white" />
+        android:text="3. Stop Engine"
+        android:textColor="#FFFFFF"
+        android:backgroundTint="#D32F2F"/>
 
 </LinearLayout>
