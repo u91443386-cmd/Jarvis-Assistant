@@ -77,11 +77,17 @@ class JarvisAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
 
     private val commandReceiver = object : BroadcastReceiver() {
+        private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val text = intent?.getStringExtra(JarvisForegroundService.EXTRA_TEXT) ?: return
+            // FIX: Ye "command", "text", aur "EXTRA_TEXT" teeno ko check karega
+            val text = intent?.getStringExtra("command") 
+                ?: intent?.getStringExtra("text") 
+                ?: intent?.getStringExtra(JarvisForegroundService.EXTRA_TEXT) 
+                ?: return
             processVoiceCommand(text)
         }
-    }
+        }
+        
 
     override fun onServiceConnected() {
         super.onServiceConnected()
