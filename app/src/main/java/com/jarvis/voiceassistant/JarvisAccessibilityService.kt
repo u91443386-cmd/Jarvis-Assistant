@@ -12,6 +12,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.content.ContextCompat
+import android.os.Build
 
 class JarvisAccessibilityService : AccessibilityService() {
     companion object {
@@ -19,9 +20,11 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         // Common package names for launching apps by voice
         private val APP_PACKAGES = mapOf(
-            // Original DeepSeek List
             "instagram" to "com.instagram.android",
+            "insta" to "com.instagram.android",
             "youtube" to "com.google.android.youtube",
+            "you tube" to "com.google.android.youtube",
+            "you do" to "com.google.android.youtube", // Phonetic fallback
             "whatsapp" to "com.whatsapp",
             "twitter" to "com.twitter.android",
             "x" to "com.twitter.android",
@@ -30,8 +33,6 @@ class JarvisAccessibilityService : AccessibilityService() {
             "settings" to "com.android.settings",
             "spotify" to "com.spotify.music",
             "telegram" to "org.telegram.messenger",
-            
-            // Your Custom Apps from Screenshots (Batch 1 & 2)
             "bgmi" to "com.pubg.imobile",
             "free fire max" to "com.dts.freefiremax",
             "zomato" to "com.application.zomato",
@@ -71,21 +72,18 @@ class JarvisAccessibilityService : AccessibilityService() {
             "play store" to "com.android.vending",
             "gpay" to "com.google.android.apps.nbu.paisa.user"
         )
-
-        // Substrings commonly present in search icon/bar resource IDs
-        private val SEARCH_ID_HINTS = listOf(
-            "search", "action_search", "search_tab", "menu_search",
-            "search_box", "search_edit_text"
-        )
     }
-    
-    
 
     private val handler = Handler(Looper.getMainLooper())
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val text = intent?.getStringExtra(JarvisForegroundService.EXTRA_TEXT) ?: return
+            // FIX: Checking both new and old intent extra names so it never misses a command
+            val text = intent?.getStringExtra("command") 
+                ?: intent?.getStringExtra("EXTRA_TEXT") 
+                ?: return
+            
+            Log.d(TAG, "Command received in Accessibility: $text")
             processVoiceCommand(text)
         }
     }
@@ -94,41 +92,36 @@ class JarvisAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         Log.d(TAG, "Accessibility service connected")
 
-        // Register receiver for commands from JarvisForegroundService
-        val filter = IntentFilter(JarvisForegroundService.ACTION_VOICE_COMMAND)
-        ContextCompat.registerReceiver(
-            this,
-            commandReceiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
+        // FIX: Registering for both new and old intent actions
+        val filter = IntentFilter().apply {
+            addAction("com.jarvis.ACTION_COMMAND")
+            addAction("com.jarvis.voiceassistant.VOICE_COMMAND")
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(commandReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(commandReceiver, filter)
+        }
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // We react to broadcast commands, no need to parse events here.
-    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    override fun onInterrupt() {
-        Log.w(TAG, "Accessibility service interrupted")
-    }
+    override fun onInterrupt() {}
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(commandReceiver)
+        try {
+            unregisterReceiver(commandReceiver)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
-    /**
-     * Main entry point from voice broadcasts.
-     * Examples:
-     * - "open instagram" -> launch Instagram
-     * - "open instagram search utkarsh_0114" -> launch Instagram, tap search, type utkarsh_0114
-     * - "search utkarsh_0114" -> in current app, tap search, type utkarsh_0114
-     */
     private fun processVoiceCommand(rawCommand: String) {
         if (rawCommand.isBlank()) return
         val lower = rawCommand.lowercase().trim()
 
-        // Extract app name if command says "open <app>"
         val appName = extractAppName(lower)
         if (appName != null) {
             val packageName = APP_PACKAGES[appName]
@@ -136,59 +129,38 @@ class JarvisAccessibilityService : AccessibilityService() {
                 launchApp(packageName)
 
                 val query = extractQuery(rawCommand)
-                handler.postDelayed({
-                    findAndClickSearchAndType(query)
-                }, 2500)  // Wait for app to load
+                if (query.isNotEmpty()) {
+                    handler.postDelayed({
+                        findAndClickSearchAndType(query)
+                    }, 2500)
+                }
                 return
             }
         }
 
-        // If no app launch, just search in current screen
         val query = extractQuery(rawCommand)
         if (query.isNotEmpty()) {
             handler.postDelayed({
                 findAndClickSearchAndType(query)
             }, 800)
-        } else {
-            Log.d(TAG, "No actionable query found")
         }
     }
 
-    /**
-     * Extracts the app name after "open" or "launch".
-     * Returns null if none found.
-     */
+    // FIX: Bulletproof app name extraction
     private fun extractAppName(lowerCommand: String): String? {
-        val openIndex = lowerCommand.indexOf("open")
-        val launchIndex = lowerCommand.indexOf("launch")
-        val startIndex = maxOf(openIndex, launchIndex)
-        if (startIndex == -1) return null
-
-        val after = lowerCommand.substring(startIndex).trim()
-        val words = after.split(Regex("\\s+"))
-        if (words.size < 2) return null
-
-        val candidate = words[1].trim(',', ' ')
-        return APP_PACKAGES.keys.firstOrNull {
-            candidate.contains(it) || it.contains(candidate)
+        return APP_PACKAGES.keys.firstOrNull { 
+            lowerCommand.contains("open $it") || lowerCommand.contains("launch $it")
         }
     }
 
-    /**
-     * Extracts the search query from voice command.
-     * Everything after "search", and also strips trailing "and type".
-     */
     private fun extractQuery(rawCommand: String): String {
         val lower = rawCommand.lowercase()
         val searchIndex = lower.indexOf("search")
         if (searchIndex == -1) return ""
 
         var query = rawCommand.substring(searchIndex + "search".length).trim()
-
-        // Remove trailing filler like "and type", "type"
         query = query.replace(Regex("(?i)\\s+(and type|type)\\s*$"), "")
-        query = query.trim().trim(',', ' ')
-        return query
+        return query.trim().trim(',', ' ')
     }
 
     private fun launchApp(packageName: String) {
@@ -198,68 +170,35 @@ class JarvisAccessibilityService : AccessibilityService() {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(launchIntent)
                 Log.d(TAG, "Launching $packageName")
-            } else {
-                Log.w(TAG, "No launch intent for $packageName")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch app", e)
         }
     }
 
-    /**
-     * After the app is open, recursively search for a search icon/bar and click it.
-     * Then set text in the focused EditText.
-     */
     private fun findAndClickSearchAndType(query: String) {
-        val root = rootInActiveWindow
-        if (root == null) {
-            handler.postDelayed({ findAndClickSearchAndType(query) }, 700)
-            return
-        }
-
-        val searchNode = findNode(root) { node ->
-            isSearchNode(node)
-        }
+        val root = rootInActiveWindow ?: return
+        val searchNode = findNode(root) { isSearchNode(it) }
 
         if (searchNode != null) {
-            Log.d(TAG, "Found search node: ${searchNode.viewIdResourceName}, text=${searchNode.text}")
             searchNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             searchNode.recycle()
-
-            // Wait for edit text to appear after clicking search
-            handler.postDelayed({
-                setTextInEditText(query)
-            }, 1000)
+            handler.postDelayed({ setTextInEditText(query) }, 1000)
         } else {
-            // If no search icon/bar, look for an EditText directly
-            val editText = findNode(root) { node ->
-                node.className?.toString()?.contains("EditText") == true && node.isVisibleToUser
+            val editText = findNode(root) { 
+                it.className?.toString()?.contains("EditText") == true && it.isVisibleToUser 
             }
             if (editText != null) {
                 setTextIntoNode(editText, query)
                 editText.recycle()
-            } else {
-                Log.w(TAG, "No search UI found")
             }
         }
-
         root.recycle()
     }
 
-    /**
-     * Recursively traverses the accessibility node tree.
-     * Returns a copy of the first node that matches [predicate].
-     */
-    private fun findNode(
-        root: AccessibilityNodeInfo?,
-        predicate: (AccessibilityNodeInfo) -> Boolean
-    ): AccessibilityNodeInfo? {
+    private fun findNode(root: AccessibilityNodeInfo?, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (root == null) return null
-
-        if (predicate(root)) {
-            // Return a copy to avoid lifecycle issues after recycling siblings
-            return AccessibilityNodeInfo.obtain(root)
-        }
+        if (predicate(root)) return AccessibilityNodeInfo.obtain(root)
 
         for (i in 0 until root.childCount) {
             val child = root.getChild(i) ?: continue
@@ -267,75 +206,43 @@ class JarvisAccessibilityService : AccessibilityService() {
             child.recycle()
             if (result != null) return result
         }
-
         return null
     }
 
-    /**
-     * Checks whether an [AccessibilityNodeInfo] represents a search icon or bar.
-     */
     private fun isSearchNode(node: AccessibilityNodeInfo): Boolean {
         if (!node.isVisibleToUser) return false
-
         val text = node.text?.toString()?.lowercase() ?: ""
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
-            // Ignore Voice Search and Mic buttons
-    if (desc.contains("voice") || desc.contains("mic") || viewId.contains("voice") || viewId.contains("mic")) {
-        return false
-    }
-    
-        // Text or content description mentions search
+
+        // Safe filter: Ignore mic/voice buttons so it doesn't trigger STT instead of text search
+        if (desc.contains("voice") || desc.contains("mic") || viewId.contains("voice") || viewId.contains("mic")) {
+            return false
+        }
         if (text.contains("search") || desc.contains("search")) return true
-
-        // Common view ID patterns
         if (viewId.contains("search") && !viewId.contains("search_edit_text")) return true
-
-        // Magnifying glass description hints
         if (desc.isNotEmpty() && (desc.contains("search") || desc.contains("magnif"))) return true
-
-        // A visible, clickable EditText is also a valid search bar
         if (className.contains("edittext") && node.isClickable) return true
-
         return false
     }
 
-    /**
-     * Finds the currently focused/visible EditText and sets the query text.
-     */
     private fun setTextInEditText(query: String) {
-        val root = rootInActiveWindow
-        if (root == null) {
-            handler.postDelayed({ setTextInEditText(query) }, 700)
-            return
+        val root = rootInActiveWindow ?: return
+        val editText = findNode(root) { 
+            it.className?.toString()?.contains("EditText") == true && it.isVisibleToUser 
         }
-
-        val editText = findNode(root) { node ->
-            node.className?.toString()?.contains("EditText") == true && node.isVisibleToUser
-        }
-
         if (editText != null) {
             setTextIntoNode(editText, query)
             editText.recycle()
-        } else {
-            Log.w(TAG, "No EditText found")
         }
-
         root.recycle()
     }
 
-    /**
-     * Performs ACTION_SET_TEXT on the given EditText node.
-     */
     private fun setTextIntoNode(node: AccessibilityNodeInfo, text: String) {
         val arguments = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text
-            )
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-        Log.d(TAG, "Set text: $text")
     }
 }
