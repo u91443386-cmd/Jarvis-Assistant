@@ -32,7 +32,7 @@ class JarvisForegroundService : Service() {
         const val CHANNEL_ID = "jarvis_voice_channel"
         const val NOTIFICATION_ID = 1001
 
-        private const val SAMPLE_RATE = 16000
+        private const val SAMPLE_RATE = 8000
         private const val HOTWORD = "jarvis"
         private const val TAG = "JarvisForegroundService"
     }
