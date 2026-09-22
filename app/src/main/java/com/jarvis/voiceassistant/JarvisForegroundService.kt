@@ -134,7 +134,7 @@ class JarvisForegroundService : Service() {
 
             
             model = Model(modelDir.absolutePath)
-            recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
+            recognizer = Recognizer(model, 8000f)
 
             isListening = true
             listenThread = Thread { runListeningLoop() }
