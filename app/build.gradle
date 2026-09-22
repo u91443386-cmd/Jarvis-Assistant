@@ -13,6 +13,10 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+            ndk {
+        abiFilters 'arm64-v8a', 'armeabi-v7a'
+            }
+        
     }
 
     buildTypes {
@@ -44,9 +48,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.android.material:material:1.12.0'
 
-    // Vosk offline speech recognition
-    implementation 'com.alphacephei:vosk-android:0.3.47'
-
-    // Coroutines (optional but used in some updaters)
+// Picovoice Porcupine (Free 1.9 version)
+implementation 'ai.picovoice:porcupine-android:1.9.5'
+// Coroutines (Optional but used in some updates)
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 }
