@@ -258,4 +258,47 @@ class JarvisForegroundService : Service() {
             }
         }
     }
+    private val downsampler = Pcm16To8kDownsampler()
+
+    class Pcm16To8kDownsampler {
+        private var previousInput = 0f
+
+        fun convert(input: ShortArray, count: Int): ByteArray {
+            if (count <= 0) return ByteArray(0)
+
+            val coefficients = floatArrayOf(-0.045f, 0.0f, 0.295f, 0.500f, 0.295f, 0.0f, -0.045f)
+            val outputSamples = count / 2
+            val output = ByteArray(outputSamples * 2)
+
+            var outputIndex = 0
+            var inputIndex = 0
+
+            while (inputIndex + 1 < count) {
+                val center = inputIndex
+
+                fun sample(relativeIndex: Int): Float {
+                    val index = center + relativeIndex
+                    return when {
+                        index < 0 -> previousInput
+                        index >= count -> input[count - 1].toFloat()
+                        else -> input[index].toFloat()
+                    }
+                }
+
+                val filtered = sample(-2) * coefficients[0] + sample(-1) * coefficients[1] +
+                               sample(0) * coefficients[2] + sample(1) * coefficients[3] +
+                               sample(2) * coefficients[4] + sample(3) * coefficients[5] +
+                               sample(4) * coefficients[6]
+
+                val clamped = filtered.coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat()).toInt().toShort()
+
+                output[outputIndex++] = (clamped.toInt() and 0xff).toByte()
+                output[outputIndex++] = ((clamped.toInt() ushr 8) and 0xff).toByte()
+                inputIndex += 2
+            }
+
+            previousInput = input[count - 1].toFloat()
+            return output
+        }
+    }
 }
