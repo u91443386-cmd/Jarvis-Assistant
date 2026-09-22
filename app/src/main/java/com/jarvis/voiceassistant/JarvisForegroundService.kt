@@ -7,17 +7,21 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.Log
-import org.json.JSONObject
-import org.vosk.Model
-import org.vosk.Recognizer
+import ai.picovoice.porcupine.Porcupine
 import java.io.File
 import java.io.FileOutputStream
 
@@ -30,54 +34,63 @@ class JarvisForegroundService : Service() {
         const val EXTRA_TEXT = "text"
         const val CHANNEL_ID = "jarvis_voice_channel"
         const val NOTIFICATION_ID = 1001
-
-        private const val SAMPLE_RATE = 16000
-        private const val HOTWORD = "jarvis"
         private const val TAG = "JarvisForegroundService"
     }
 
+    private var porcupine: Porcupine? = null
     private var audioRecord: AudioRecord? = null
-    private var recognizer: Recognizer? = null
-    private var model: Model? = null
-    private var listenThread: Thread? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private val handler = Handler(Looper.getMainLooper())
 
     @Volatile
-    private var isListening = false
-    private var lastSentCommand = ""
+    private var wakeLoopRunning = false
+    private var beepMuted = false
+
+    private var originalMusicVolume = 0
+    private var originalSystemVolume = 0
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Starting Jarvis..."))
-        prepareModelAndStartListening()
+        
+        val notification = buildNotification("Listening for 'Jarvis'...")
+        
+        // BUG FIX: Android 10+ (aur khaas kar Android 14) ke liye Microphone ServiceType zaroori hai
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        
+        copyAssets()
+
+        Thread {
+            initializePorcupine()
+            startWakeWordLoop()
+        }.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            else -> {
-                // Already started in onCreate
-            }
+        if (intent?.action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        isListening = false
-        listenThread?.interrupt()
+        wakeLoopRunning = false
+        unmuteRecognitionBeep()
 
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
 
-        recognizer?.close()
-        recognizer = null
+        speechRecognizer?.destroy()
+        speechRecognizer = null
 
-        model?.close()
-        model = null
+        try { porcupine?.delete() } catch (e: Exception) {}
+        porcupine = null
 
         super.onDestroy()
     }
@@ -88,10 +101,11 @@ class JarvisForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Jarvis Voice Assistant",
+                "Jarvis Assistant",
                 NotificationManager.IMPORTANCE_LOW
             )
-            channel.description = "Continuous offline voice recognition"
+            channel.description = "Continuous offline wake-word detection"
+            channel.setSound(null, null)
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
@@ -99,10 +113,7 @@ class JarvisForegroundService : Service() {
 
     private fun buildNotification(text: String): Notification {
         val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
 
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -121,175 +132,179 @@ class JarvisForegroundService : Service() {
             .build()
     }
 
-    private fun prepareModelAndStartListening() {
+    private fun copyAssets() {
+        copyAsset("porcupine_params.pv")
+        copyAsset("jarvis_android.ppn")
+    }
+
+    private fun copyAsset(fileName: String) {
+        val dest = File(filesDir, fileName)
+        if (dest.exists()) return
         try {
-            val modelDir = File(filesDir, "model")
-            if (!modelDir.exists() || modelDir.listFiles()?.isEmpty() != false) {
-                copyAssetFolder(this, "model", modelDir)
+            assets.open(fileName).use { input ->
+                FileOutputStream(dest).use { output -> input.copyTo(output) }
             }
-
-            model = Model(modelDir.absolutePath)
-            recognizer = Recognizer(model, 8000f)
-
-            isListening = true
-            listenThread = Thread { runListeningLoop() }
-            listenThread?.start()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize Vosk", e)
+            Log.e(TAG, "Failed to copy asset: $fileName", e)
+        }
+    }
+
+    private fun initializePorcupine() {
+        try {
+            val modelPath = File(filesDir, "porcupine_params.pv").absolutePath
+            val keywordPath = File(filesDir, "jarvis_android.ppn").absolutePath
+
+            porcupine = Porcupine.Builder()
+                .setKeywordPath(keywordPath)
+                .setModelPath(modelPath)
+                .setSensitivity(0.7f)
+                .build(applicationContext)
+        } catch (e: Exception) {
+            Log.e(TAG, "Porcupine init failed", e)
             stopSelf()
         }
     }
 
-    private fun runListeningLoop() {
-        val minBuffer = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
+    private fun startWakeWordLoop() {
+        val ppn = porcupine ?: return
+        if (wakeLoopRunning) return
+
+        val sampleRate = ppn.sampleRate
+        val frameLength = ppn.frameLength
+
+        val minBuf = AudioRecord.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
-
-        if (minBuffer == AudioRecord.ERROR || minBuffer == AudioRecord.ERROR_BAD_VALUE) {
-            Log.e(TAG, "Invalid audio buffer size")
-            stopSelf()
-            return
-        }
-
-        val bufferSize = maxOf(minBuffer * 2, 4096)
+        val bufferSize = maxOf(minBuf, frameLength * 2 * 2)
 
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
+            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
         )
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioRecord initialization failed")
             stopSelf()
             return
         }
 
         audioRecord?.startRecording()
-        val buffer = ShortArray(minBuffer)
-        Log.d(TAG, "Listening silently...")
+        wakeLoopRunning = true
+        val pcm = ShortArray(frameLength)
 
-        while (isListening && !Thread.currentThread().isInterrupted) {
-            val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
-            if (read > 0) {
-                val recognizer = this.recognizer ?: continue
-                
-                val downsampledBytes = downsampler.convert(buffer, read)
-                val ended = recognizer.acceptWaveForm(downsampledBytes, downsampledBytes.size)
-                
-                if (ended) {
-                    val resultJson = recognizer.result
-                    if (resultJson != null) {
-                        val text = parseText(resultJson)
-                        handleRecognizedText(text, isFinal = true)
+        try {
+            while (wakeLoopRunning) {
+                val read = audioRecord?.read(pcm, 0, frameLength) ?: -1
+                if (read > 0) {
+                    val keywordIndex = ppn.process(pcm)
+                    if (keywordIndex >= 0) {
+                        Log.i(TAG, "Jarvis wake word detected!")
+                        handler.post {
+                            stopWakeWordLoop()
+                            startGoogleSpeechAfterWakeWord()
+                        }
+                        break
                     }
                 }
             }
-        }
-    }
-
-    private fun parseText(json: String): String {
-        return try {
-            JSONObject(json).optString("text", "")
         } catch (e: Exception) {
-            ""
+            handler.post { restartWakeWordLoop() }
         }
     }
 
-    private fun handleRecognizedText(text: String, isFinal: Boolean) {
-        if (text.isBlank() || !isFinal) return
+    private fun stopWakeWordLoop() {
+        wakeLoopRunning = false
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+    }
 
-        val lower = text.lowercase().trim()
-        if (lower.contains(HOTWORD)) {
-            val command = text.substringAfter(HOTWORD, "").trim()
-            if (command.isNotEmpty() && command != lastSentCommand) {
-                lastSentCommand = command
-                sendCommandBroadcast(command)
+    private fun restartWakeWordLoop() {
+        if (wakeLoopRunning) return
+        Thread {
+            if (porcupine == null) initializePorcupine()
+            startWakeWordLoop()
+        }.start()
+    }
 
-                val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                manager.notify(NOTIFICATION_ID, buildNotification("Command: $command"))
-                
-                // 3 second delay to reset command memory so it listens again
-                Handler(Looper.getMainLooper()).postDelayed({
-                    lastSentCommand = ""
-                }, 3000)
-            }
+    private fun startGoogleSpeechAfterWakeWord() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            restartWakeWordLoop()
+            return
         }
-    }
 
-    private fun sendCommandBroadcast(text: String) {
-        val intent = Intent(ACTION_VOICE_COMMAND)
-        intent.setPackage(packageName)
-        intent.putExtra(EXTRA_TEXT, text)
-        sendBroadcast(intent)
-    }
+        muteRecognitionBeep()
 
-    private fun copyAssetFolder(context: Context, assetPath: String, destination: File) {
-        val assetManager = context.assets
-        val files = assetManager.list(assetPath) ?: return
-        destination.mkdirs()
-
-        for (file in files) {
-            val fullPath = if (assetPath.isEmpty()) file else "$assetPath/$file"
-            val outFile = File(destination, file)
-
-            if (assetManager.list(fullPath).isNullOrEmpty()) {
-                assetManager.open(fullPath).use { input ->
-                    FileOutputStream(outFile).use { output ->
-                        input.copyTo(output)
-                    }
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    handler.postDelayed({ unmuteRecognitionBeep() }, 800)
+                    updateNotification("Listening to command...")
                 }
-            } else {
-                copyAssetFolder(context, fullPath, outFile)
-            }
+                override fun onBeginningOfSpeech() { unmuteRecognitionBeep() }
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() { unmuteRecognitionBeep() }
+                override fun onError(error: Int) {
+                    unmuteRecognitionBeep()
+                    destroyRecognizer()
+                    restartWakeWordLoop()
+                    updateNotification("Listening for 'Jarvis'...")
+                }
+                override fun onResults(results: Bundle?) {
+                    unmuteRecognitionBeep()
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        val command = matches[0].lowercase()
+                        val intent = Intent(ACTION_VOICE_COMMAND)
+                        intent.setPackage(packageName)
+                        intent.putExtra(EXTRA_TEXT, command)
+                        sendBroadcast(intent)
+                    }
+                    destroyRecognizer()
+                    restartWakeWordLoop()
+                    updateNotification("Listening for 'Jarvis'...")
+                }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
         }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+        }
+        speechRecognizer?.startListening(intent)
     }
 
-    private val downsampler = Pcm16To8kDownsampler()
+    private fun destroyRecognizer() {
+        try { speechRecognizer?.destroy() } catch (e: Exception) {}
+        speechRecognizer = null
+    }
 
-    class Pcm16To8kDownsampler {
-        private var previousInput = 0f
+    private fun muteRecognitionBeep() {
+        if (beepMuted) return
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            originalMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            originalSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_SYSTEM)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0)
+            beepMuted = true
+        } catch (e: Exception) {}
+    }
 
-        fun convert(input: ShortArray, count: Int): ByteArray {
-            if (count <= 0) return ByteArray(0)
+    private fun unmuteRecognitionBeep() {
+        if (!beepMuted) return
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalMusicVolume, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, originalSystemVolume, 0)
+        } catch (e: Exception) {}
+        finally { beepMuted = false }
+    }
 
-            val coefficients = floatArrayOf(-0.045f, 0.0f, 0.295f, 0.500f, 0.295f, 0.0f, -0.045f)
-            val outputSamples = count / 2
-            val output = ByteArray(outputSamples * 2)
-
-            var outputIndex = 0
-            var inputIndex = 0
-
-            while (inputIndex + 1 < count) {
-                val center = inputIndex
-
-                fun sample(relativeIndex: Int): Float {
-                    val index = center + relativeIndex
-                    return when {
-                        index < 0 -> previousInput
-                        index >= count -> input[count - 1].toFloat()
-                        else -> input[index].toFloat()
-                    }
-                }
-
-                val filtered = sample(-2) * coefficients[0] + sample(-1) * coefficients[1] +
-                               sample(0) * coefficients[2] + sample(1) * coefficients[3] +
-                               sample(2) * coefficients[4] + sample(3) * coefficients[5] +
-                               sample(4) * coefficients[6]
-
-                val clamped = filtered.coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat()).toInt().toShort()
-
-                output[outputIndex++] = (clamped.toInt() and 0xff).toByte()
-                output[outputIndex++] = ((clamped.toInt() ushr 8) and 0xff).toByte()
-                inputIndex += 2
-            }
-
-            previousInput = input[count - 1].toFloat()
-            return output
-        }
+    private fun updateNotification(text: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, buildNotification(text))
     }
 }
