@@ -5,13 +5,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.core.content.ContextCompat
 
 class JarvisAccessibilityService : AccessibilityService() {
     companion object {
@@ -67,38 +67,36 @@ class JarvisAccessibilityService : AccessibilityService() {
             "play store" to "com.android.vending",
             "gpay" to "com.google.android.apps.nbu.paisa.user"
         )
-
-        private val SEARCH_ID_HINTS = listOf(
-            "search", "action_search", "search_tab", "menu_search",
-            "search_box", "search_edit_text"
-        )
     }
     
     private val handler = Handler(Looper.getMainLooper())
 
-    
-        private val commandReceiver = object : BroadcastReceiver() {
+    private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            // FIX: Ye "command", "text", aur "EXTRA_TEXT" teeno ko check karega
             val text = intent?.getStringExtra("command") 
                 ?: intent?.getStringExtra("text") 
                 ?: intent?.getStringExtra(JarvisForegroundService.EXTRA_TEXT) 
                 ?: return
             processVoiceCommand(text)
         }
-        }
-        
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.d(TAG, "Accessibility service connected")
         val filter = IntentFilter(JarvisForegroundService.ACTION_VOICE_COMMAND)
-        ContextCompat.registerReceiver(
-            this,
-            commandReceiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
+        
+        // 100% Crash-Proof Receiver Registration for Android 15
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(commandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(commandReceiver, filter)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Receiver registration failed", e)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -109,7 +107,11 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(commandReceiver)
+        try {
+            unregisterReceiver(commandReceiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Receiver unregister failed", e)
+        }
     }
 
     private fun processVoiceCommand(rawCommand: String) {
@@ -239,7 +241,6 @@ class JarvisAccessibilityService : AccessibilityService() {
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
 
-        // Yahi aapka original logic hai (mic button ignore kiye bina)
         if (text.contains("search") || desc.contains("search")) return true
         if (viewId.contains("search") && !viewId.contains("search_edit_text")) return true
         if (desc.isNotEmpty() && (desc.contains("search") || desc.contains("magnif"))) return true
