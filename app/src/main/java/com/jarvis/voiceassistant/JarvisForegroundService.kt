@@ -182,11 +182,14 @@ class JarvisForegroundService : Service() {
         val buffer = ShortArray(minBuffer)
         Log.d(TAG, "Listening silently...")
 
-        while (isListening && !Thread.currentThread().isInterrupted) {
+                while (isListening && !Thread.currentThread().isInterrupted) {
             val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
             if (read > 0) {
                 val recognizer = this.recognizer ?: continue
-                val ended = recognizer.acceptWaveForm(buffer, read)
+                
+                val downsampledBytes = downsampler.convert(buffer, read)
+                val ended = recognizer.acceptWaveForm(downsampledBytes, downsampledBytes.size)
+                
                 if (ended) {
                     val resultJson = recognizer.result
                     if (resultJson != null) {
@@ -195,6 +198,8 @@ class JarvisForegroundService : Service() {
                     }
                 }
             }
+                }
+                
         }
     }
 
