@@ -11,20 +11,19 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import org.json.JSONObject
-
 import org.vosk.Model
 import org.vosk.Recognizer
-
 import java.io.File
 import java.io.FileOutputStream
 
 class JarvisForegroundService : Service() {
 
     companion object {
-        // PACKAGE NAMES THEEK KIYE GAYE HAIN
         const val ACTION_START = "com.jarvis.voiceassistant.START"
         const val ACTION_STOP = "com.jarvis.voiceassistant.STOP"
         const val ACTION_VOICE_COMMAND = "com.jarvis.voiceassistant.VOICE_COMMAND"
@@ -122,9 +121,6 @@ class JarvisForegroundService : Service() {
             .build()
     }
 
-    /**
-     * Copies the Vosk model from assets to filesDir/model, then starts listening.
-     */
     private fun prepareModelAndStartListening() {
         try {
             val modelDir = File(filesDir, "model")
@@ -132,7 +128,6 @@ class JarvisForegroundService : Service() {
                 copyAssetFolder(this, "model", modelDir)
             }
 
-            
             model = Model(modelDir.absolutePath)
             recognizer = Recognizer(model, 8000f)
 
@@ -145,10 +140,6 @@ class JarvisForegroundService : Service() {
         }
     }
 
-    /**
-     * Reads PCM audio in 16 kHz mono and feeds it to Vosk.
-     * This is completely silent – no system beep, no music ducking.
-     */
     private fun runListeningLoop() {
         val minBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
@@ -165,7 +156,7 @@ class JarvisForegroundService : Service() {
         val bufferSize = maxOf(minBuffer * 2, 4096)
 
         audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION, // Use VOICE_RECOGNITION internally
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -182,7 +173,7 @@ class JarvisForegroundService : Service() {
         val buffer = ShortArray(minBuffer)
         Log.d(TAG, "Listening silently...")
 
-                while (isListening && !Thread.currentThread().isInterrupted) {
+        while (isListening && !Thread.currentThread().isInterrupted) {
             val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
             if (read > 0) {
                 val recognizer = this.recognizer ?: continue
@@ -198,8 +189,6 @@ class JarvisForegroundService : Service() {
                     }
                 }
             }
-                }
-                
         }
     }
 
@@ -211,10 +200,6 @@ class JarvisForegroundService : Service() {
         }
     }
 
-    /**
-     * Checks for the hotword and extracts the command after it.
-     * Only final results are used to avoid duplicate triggers.
-     */
     private fun handleRecognizedText(text: String, isFinal: Boolean) {
         if (text.isBlank() || !isFinal) return
 
@@ -227,20 +212,22 @@ class JarvisForegroundService : Service() {
 
                 val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 manager.notify(NOTIFICATION_ID, buildNotification("Command: $command"))
+                
+                // 3 second delay to reset command memory so it listens again
+                Handler(Looper.getMainLooper()).postDelayed({
+                    lastSentCommand = ""
+                }, 3000)
             }
         }
     }
 
     private fun sendCommandBroadcast(text: String) {
         val intent = Intent(ACTION_VOICE_COMMAND)
-        intent.setPackage(packageName) // Restrict to our own app
+        intent.setPackage(packageName)
         intent.putExtra(EXTRA_TEXT, text)
         sendBroadcast(intent)
     }
 
-    /**
-     * Recursively copies a folder from assets to the destination directory.
-     */
     private fun copyAssetFolder(context: Context, assetPath: String, destination: File) {
         val assetManager = context.assets
         val files = assetManager.list(assetPath) ?: return
@@ -251,18 +238,17 @@ class JarvisForegroundService : Service() {
             val outFile = File(destination, file)
 
             if (assetManager.list(fullPath).isNullOrEmpty()) {
-                // It's a file
                 assetManager.open(fullPath).use { input ->
                     FileOutputStream(outFile).use { output ->
                         input.copyTo(output)
                     }
                 }
             } else {
-                // It's a directory
                 copyAssetFolder(context, fullPath, outFile)
             }
         }
     }
+
     private val downsampler = Pcm16To8kDownsampler()
 
     class Pcm16To8kDownsampler {
