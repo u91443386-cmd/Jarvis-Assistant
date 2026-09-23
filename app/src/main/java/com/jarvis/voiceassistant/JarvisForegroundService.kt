@@ -46,9 +46,6 @@ class JarvisForegroundService : Service() {
     private var wakeLoopRunning = false
     private var beepMuted = false
 
-    private var originalMusicVolume = 0
-    private var originalSystemVolume = 0
-
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -157,7 +154,8 @@ class JarvisForegroundService : Service() {
             porcupine = Porcupine.Builder()
                 .setKeywordPath(keywordPath)
                 .setModelPath(modelPath)
-                .setSensitivity(0.7f)
+                // UPGRADE 1: Sensitivity 85% kar di hai taki 1 hi baar mein sun le
+                .setSensitivity(0.85f)
                 .build(applicationContext)
         } catch (e: Exception) {
             Log.e(TAG, "Porcupine init failed", e)
@@ -198,6 +196,18 @@ class JarvisForegroundService : Service() {
                     val keywordIndex = ppn.process(pcm)
                     if (keywordIndex >= 0) {
                         Log.i(TAG, "Jarvis wake word detected!")
+                        
+                        // UPGRADE 2: Halka sa vibration taki aapko pata chal jaye mic on hai
+                        try {
+                            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                vibrator.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                            } else {
+                                @Suppress("DEPRECATION")
+                                vibrator.vibrate(50)
+                            }
+                        } catch (e: Exception) {}
+
                         handler.post {
                             stopWakeWordLoop()
                             startGoogleSpeechAfterWakeWord()
@@ -281,14 +291,20 @@ class JarvisForegroundService : Service() {
         speechRecognizer = null
     }
 
+    // UPGRADE 3: Naya Mute aur Unmute fix jisse Xiaomi mein Volume Slider nahi aayega
     private fun muteRecognitionBeep() {
         if (beepMuted) return
         try {
             val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            originalMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            originalSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_SYSTEM)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
-            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_MUSIC, true)
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_SYSTEM, true)
+            }
             beepMuted = true
         } catch (e: Exception) {}
     }
@@ -297,8 +313,15 @@ class JarvisForegroundService : Service() {
         if (!beepMuted) return
         try {
             val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalMusicVolume, 0)
-            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, originalSystemVolume, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_MUSIC, false)
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_SYSTEM, false)
+            }
         } catch (e: Exception) {}
         finally { beepMuted = false }
     }
