@@ -83,10 +83,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.d(TAG, "Accessibility service connected")
         val filter = IntentFilter(JarvisForegroundService.ACTION_VOICE_COMMAND)
-        
-        // 100% Crash-Proof Receiver Registration for Android 15
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(commandReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -94,24 +91,16 @@ class JarvisAccessibilityService : AccessibilityService() {
                 @Suppress("UnspecifiedRegisterReceiverFlag")
                 registerReceiver(commandReceiver, filter)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Receiver registration failed", e)
-        }
+        } catch (e: Exception) {}
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    override fun onInterrupt() {
-        Log.w(TAG, "Accessibility service interrupted")
-    }
+    override fun onInterrupt() {}
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            unregisterReceiver(commandReceiver)
-        } catch (e: Exception) {
-            Log.e(TAG, "Receiver unregister failed", e)
-        }
+        try { unregisterReceiver(commandReceiver) } catch (e: Exception) {}
     }
 
     private fun processVoiceCommand(rawCommand: String) {
@@ -124,9 +113,12 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (packageName != null) {
                 launchApp(packageName)
                 val query = extractQuery(rawCommand)
-                handler.postDelayed({
-                    findAndClickSearchAndType(query)
-                }, 2500)
+                
+                if (query.isNotEmpty()) {
+                    handler.postDelayed({
+                        findAndClickSearchAndType(query)
+                    }, 2500)
+                }
                 return
             }
         }
@@ -136,8 +128,6 @@ class JarvisAccessibilityService : AccessibilityService() {
             handler.postDelayed({
                 findAndClickSearchAndType(query)
             }, 800)
-        } else {
-            Log.d(TAG, "No actionable query found")
         }
     }
 
@@ -174,13 +164,8 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(launchIntent)
-                Log.d(TAG, "Launching $packageName")
-            } else {
-                Log.w(TAG, "No launch intent for $packageName")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch app", e)
-        }
+        } catch (e: Exception) {}
     }
 
     private fun findAndClickSearchAndType(query: String) {
@@ -190,18 +175,13 @@ class JarvisAccessibilityService : AccessibilityService() {
             return
         }
 
-        val searchNode = findNode(root) { node ->
-            isSearchNode(node)
-        }
+        val searchNode = findNode(root) { node -> isSearchNode(node) }
 
         if (searchNode != null) {
-            Log.d(TAG, "Found search node: ${searchNode.viewIdResourceName}, text=${searchNode.text}")
             searchNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             searchNode.recycle()
-
-            handler.postDelayed({
-                setTextInEditText(query)
-            }, 1000)
+            // Fix: Wait for 1 second, then run the smart typing logic
+            handler.postDelayed({ setTextInEditText(query, 0) }, 1000)
         } else {
             val editText = findNode(root) { node ->
                 node.className?.toString()?.contains("EditText") == true && node.isVisibleToUser
@@ -209,8 +189,35 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (editText != null) {
                 setTextIntoNode(editText, query)
                 editText.recycle()
-            } else {
-                Log.w(TAG, "No search UI found")
+            }
+        }
+        root.recycle()
+    }
+
+    // Fix: Added a retryCount to support Double-Tap (like clicking bottom tab, then top bar in Instagram)
+    private fun setTextInEditText(query: String, retryCount: Int) {
+        val root = rootInActiveWindow
+        if (root == null) {
+            if (retryCount < 3) handler.postDelayed({ setTextInEditText(query, retryCount + 1) }, 700)
+            return
+        }
+
+        val editText = findNode(root) { node ->
+            node.className?.toString()?.contains("EditText") == true && node.isVisibleToUser
+        }
+
+        if (editText != null) {
+            // Agar seedha typing box mil gaya (e.g. YouTube), toh type kar do
+            setTextIntoNode(editText, query)
+            editText.recycle()
+        } else {
+            // Agar typing box nahi mila (e.g. Instagram Explore page), toh upar wale search button ko dhoondh kar click karo
+            val secondarySearchNode = findNode(root) { node -> isSearchNode(node) }
+            if (secondarySearchNode != null && retryCount < 2) {
+                secondarySearchNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                secondarySearchNode.recycle()
+                // Click karne ke baad 1 second ruko aur phir se type karne ki koshish karo
+                handler.postDelayed({ setTextInEditText(query, retryCount + 1) }, 1000)
             }
         }
         root.recycle()
@@ -221,9 +228,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         predicate: (AccessibilityNodeInfo) -> Boolean
     ): AccessibilityNodeInfo? {
         if (root == null) return null
-        if (predicate(root)) {
-            return AccessibilityNodeInfo.obtain(root)
-        }
+        if (predicate(root)) return AccessibilityNodeInfo.obtain(root)
+        
         for (i in 0 until root.childCount) {
             val child = root.getChild(i) ?: continue
             val result = findNode(child, predicate)
@@ -241,6 +247,10 @@ class JarvisAccessibilityService : AccessibilityService() {
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
         val className = node.className?.toString()?.lowercase() ?: ""
 
+        if (desc.contains("voice") || desc.contains("mic") || viewId.contains("voice") || viewId.contains("mic")) {
+            return false
+        }
+
         if (text.contains("search") || desc.contains("search")) return true
         if (viewId.contains("search") && !viewId.contains("search_edit_text")) return true
         if (desc.isNotEmpty() && (desc.contains("search") || desc.contains("magnif"))) return true
@@ -249,34 +259,10 @@ class JarvisAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun setTextInEditText(query: String) {
-        val root = rootInActiveWindow
-        if (root == null) {
-            handler.postDelayed({ setTextInEditText(query) }, 700)
-            return
-        }
-
-        val editText = findNode(root) { node ->
-            node.className?.toString()?.contains("EditText") == true && node.isVisibleToUser
-        }
-
-        if (editText != null) {
-            setTextIntoNode(editText, query)
-            editText.recycle()
-        } else {
-            Log.w(TAG, "No EditText found")
-        }
-        root.recycle()
-    }
-
     private fun setTextIntoNode(node: AccessibilityNodeInfo, text: String) {
         val arguments = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text
-            )
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-        Log.d(TAG, "Set text: $text")
     }
 }
