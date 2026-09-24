@@ -15,8 +15,9 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
+import android.os.Vibrator
+import android.os.VibrationEffect
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -52,7 +53,6 @@ class JarvisForegroundService : Service() {
         
         val notification = buildNotification("Listening for 'Jarvis'...")
         
-        // BUG FIX: Android 10+ (aur khaas kar Android 14) ke liye Microphone ServiceType zaroori hai
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else {
@@ -154,7 +154,6 @@ class JarvisForegroundService : Service() {
             porcupine = Porcupine.Builder()
                 .setKeywordPath(keywordPath)
                 .setModelPath(modelPath)
-                // UPGRADE 1: Sensitivity 85% kar di hai taki 1 hi baar mein sun le
                 .setSensitivity(0.85f)
                 .build(applicationContext)
         } catch (e: Exception) {
@@ -197,14 +196,14 @@ class JarvisForegroundService : Service() {
                     if (keywordIndex >= 0) {
                         Log.i(TAG, "Jarvis wake word detected!")
                         
-                        // UPGRADE 2: Halka sa vibration taki aapko pata chal jaye mic on hai
+                        // FIX: Xiaomi motor ke liye vibration badha kar 150ms kar diya
                         try {
-                            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                vibrator.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                vibrator.vibrate(VibrationEffect.createOneShot(150, VibrationEffect.DEFAULT_AMPLITUDE))
                             } else {
                                 @Suppress("DEPRECATION")
-                                vibrator.vibrate(50)
+                                vibrator.vibrate(150)
                             }
                         } catch (e: Exception) {}
 
@@ -291,7 +290,7 @@ class JarvisForegroundService : Service() {
         speechRecognizer = null
     }
 
-    // UPGRADE 3: Naya Mute aur Unmute fix jisse Xiaomi mein Volume Slider nahi aayega
+    // FIX: Google ka naya nakhra band karne ke liye Notification aur Alarm stream bhi Mute kar diye
     private fun muteRecognitionBeep() {
         if (beepMuted) return
         try {
@@ -299,11 +298,17 @@ class JarvisForegroundService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
                 audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_ALARM, AudioManager.ADJUST_MUTE, 0)
             } else {
                 @Suppress("DEPRECATION")
                 audioManager.setStreamMute(AudioManager.STREAM_MUSIC, true)
                 @Suppress("DEPRECATION")
                 audioManager.setStreamMute(AudioManager.STREAM_SYSTEM, true)
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_NOTIFICATION, true)
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_ALARM, true)
             }
             beepMuted = true
         } catch (e: Exception) {}
@@ -316,11 +321,17 @@ class JarvisForegroundService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
                 audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_UNMUTE, 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_ALARM, AudioManager.ADJUST_UNMUTE, 0)
             } else {
                 @Suppress("DEPRECATION")
                 audioManager.setStreamMute(AudioManager.STREAM_MUSIC, false)
                 @Suppress("DEPRECATION")
                 audioManager.setStreamMute(AudioManager.STREAM_SYSTEM, false)
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_NOTIFICATION, false)
+                @Suppress("DEPRECATION")
+                audioManager.setStreamMute(AudioManager.STREAM_ALARM, false)
             }
         } catch (e: Exception) {}
         finally { beepMuted = false }
