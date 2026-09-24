@@ -48,7 +48,7 @@
         <!-- Accessibility UI Automator Service -->
         <service
             android:name=".JarvisAccessibilityService"
-            android:exported="false"
+            android:exported="true"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:label="Jarvis Smart Accessibility">
             <intent-filter>
