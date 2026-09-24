@@ -14,9 +14,10 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
-import android.os.IBinder
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.os.Vibrator
 import android.os.VibrationEffect
 import android.speech.RecognitionListener
@@ -40,13 +41,17 @@ class JarvisForegroundService : Service() {
     }
 
     private var porcupine: Porcupine? = null
-    private var audioRecord: AudioRecord? = null
+    
+    // FIX 2: Synchronized thread-safe access
+    @Volatile private var audioRecord: AudioRecord? = null
     private var speechRecognizer: SpeechRecognizer? = null
+    
     private val handler = Handler(Looper.getMainLooper())
+    private val audioLock = Any() // Thread lock for AudioRecord
 
-    @Volatile
-    private var wakeLoopRunning = false
-    private var beepMuted = false
+    @Volatile private var wakeLoopRunning = false
+    @Volatile private var beepMuted = false // FIX 4: Made Volatile
+    @Volatile private var isServiceDestroyed = false // FIX 5: Cancellation flag
 
     override fun onCreate() {
         super.onCreate()
@@ -54,10 +59,14 @@ class JarvisForegroundService : Service() {
         
         val notification = buildNotification("Listening for 'Jarvis'...")
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Foreground Service start prevented from crashing app", e)
         }
         
         copyAssets()
@@ -77,18 +86,33 @@ class JarvisForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        isServiceDestroyed = true
         wakeLoopRunning = false
+        
+        // FIX 7: Remove all delayed callbacks to prevent memory leak
+        handler.removeCallbacksAndMessages(null)
+        
+        // Always unmute on destroy to prevent permanent global mute
         unmuteRecognitionBeep()
 
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+        // FIX 2 & 8: Safe cleanup within try-catch and locks
+        try {
+            synchronized(audioLock) {
+                audioRecord?.stop()
+                audioRecord?.release()
+                audioRecord = null
+            }
+        } catch (e: Exception) {}
 
-        speechRecognizer?.destroy()
-        speechRecognizer = null
+        try {
+            speechRecognizer?.destroy()
+            speechRecognizer = null
+        } catch (e: Exception) {}
 
-        try { porcupine?.delete() } catch (e: Exception) {}
-        porcupine = null
+        try {
+            porcupine?.delete()
+            porcupine = null
+        } catch (e: Exception) {}
 
         super.onDestroy()
     }
@@ -110,8 +134,12 @@ class JarvisForegroundService : Service() {
     }
 
     private fun buildNotification(text: String): Notification {
+        // FIX 6: Added proper intent flags for new task
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
         val pendingIntent = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
 
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -142,12 +170,11 @@ class JarvisForegroundService : Service() {
             assets.open(fileName).use { input ->
                 FileOutputStream(dest).use { output -> input.copyTo(output) }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy asset: $fileName", e)
-        }
+        } catch (e: Exception) {}
     }
 
     private fun initializePorcupine() {
+        if (isServiceDestroyed) return
         try {
             val modelPath = File(filesDir, "porcupine_params.pv").absolutePath
             val keywordPath = File(filesDir, "jarvis_android.ppn").absolutePath
@@ -158,15 +185,14 @@ class JarvisForegroundService : Service() {
                 .setSensitivity(0.85f)
                 .build(applicationContext)
         } catch (e: Exception) {
-            Log.e(TAG, "Porcupine init failed", e)
             stopSelf()
         }
     }
 
     private fun startWakeWordLoop() {
+        if (isServiceDestroyed || wakeLoopRunning) return
+        
         val ppn = porcupine ?: return
-        if (wakeLoopRunning) return
-
         val sampleRate = ppn.sampleRate
         val frameLength = ppn.frameLength
 
@@ -175,29 +201,49 @@ class JarvisForegroundService : Service() {
         )
         val bufferSize = maxOf(minBuf, frameLength * 2 * 2)
 
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
-        )
+        try {
+            synchronized(audioLock) {
+                audioRecord = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
+                )
+                
+                // FIX 9: Release resources if not initialized
+                if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                    audioRecord?.release()
+                    audioRecord = null
+                    stopSelf()
+                    return
+                }
 
-        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                // FIX 1: startRecording inside crash shield
+                audioRecord?.startRecording()
+            }
+        } catch (e: Exception) {
             stopSelf()
             return
         }
 
-        audioRecord?.startRecording()
         wakeLoopRunning = true
         val pcm = ShortArray(frameLength)
+        
+        // Micro-optimization: Give audio thread priority
+        Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
 
         try {
-            while (wakeLoopRunning) {
-                val read = audioRecord?.read(pcm, 0, frameLength) ?: -1
-                if (read > 0) {
+            while (wakeLoopRunning && !isServiceDestroyed) {
+                var totalRead = 0
+                // FIX 3: Prevent partial reads causing false detections
+                while (totalRead < frameLength && wakeLoopRunning) {
+                    val read = audioRecord?.read(pcm, totalRead, frameLength - totalRead) ?: -1
+                    if (read < 0) throw Exception("Audio read error")
+                    if (read == 0) continue // Rare but safe
+                    totalRead += read
+                }
+
+                if (totalRead == frameLength) {
                     val keywordIndex = ppn.process(pcm)
                     if (keywordIndex >= 0) {
-                        Log.i(TAG, "Jarvis wake word detected!")
-                        
-                        // FIX: Xiaomi motor ke liye vibration badha kar 150ms kar diya
                         try {
                             val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -223,13 +269,17 @@ class JarvisForegroundService : Service() {
 
     private fun stopWakeWordLoop() {
         wakeLoopRunning = false
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+        synchronized(audioLock) {
+            try {
+                audioRecord?.stop()
+                audioRecord?.release()
+                audioRecord = null
+            } catch (e: Exception) {}
+        }
     }
 
     private fun restartWakeWordLoop() {
-        if (wakeLoopRunning) return
+        if (wakeLoopRunning || isServiceDestroyed) return
         Thread {
             if (porcupine == null) initializePorcupine()
             startWakeWordLoop()
@@ -237,53 +287,58 @@ class JarvisForegroundService : Service() {
     }
 
     private fun startGoogleSpeechAfterWakeWord() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+        if (!SpeechRecognizer.isRecognitionAvailable(this) || isServiceDestroyed) {
             restartWakeWordLoop()
             return
         }
 
         muteRecognitionBeep()
 
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    handler.postDelayed({ unmuteRecognitionBeep() }, 800)
-                    updateNotification("Listening to command...")
-                }
-                override fun onBeginningOfSpeech() { unmuteRecognitionBeep() }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { unmuteRecognitionBeep() }
-                override fun onError(error: Int) {
-                    unmuteRecognitionBeep()
-                    destroyRecognizer()
-                    restartWakeWordLoop()
-                    updateNotification("Listening for 'Jarvis'...")
-                }
-                override fun onResults(results: Bundle?) {
-                    unmuteRecognitionBeep()
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    if (!matches.isNullOrEmpty()) {
-                        val command = matches[0].lowercase()
-                        val intent = Intent(ACTION_VOICE_COMMAND)
-                        intent.setPackage(packageName)
-                        intent.putExtra(EXTRA_TEXT, command)
-                        sendBroadcast(intent)
+        try {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+                setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        handler.postDelayed({ unmuteRecognitionBeep() }, 800)
+                        updateNotification("Listening to command...")
                     }
-                    destroyRecognizer()
-                    restartWakeWordLoop()
-                    updateNotification("Listening for 'Jarvis'...")
-                }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-        }
+                    override fun onBeginningOfSpeech() { unmuteRecognitionBeep() }
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onEndOfSpeech() { unmuteRecognitionBeep() }
+                    override fun onError(error: Int) {
+                        unmuteRecognitionBeep()
+                        destroyRecognizer()
+                        restartWakeWordLoop()
+                        updateNotification("Listening for 'Jarvis'...")
+                    }
+                    override fun onResults(results: Bundle?) {
+                        unmuteRecognitionBeep()
+                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        if (!matches.isNullOrEmpty()) {
+                            val command = matches[0].lowercase()
+                            val intent = Intent(ACTION_VOICE_COMMAND)
+                            intent.setPackage(packageName)
+                            intent.putExtra(EXTRA_TEXT, command)
+                            sendBroadcast(intent)
+                        }
+                        destroyRecognizer()
+                        restartWakeWordLoop()
+                        updateNotification("Listening for 'Jarvis'...")
+                    }
+                    override fun onPartialResults(partialResults: Bundle?) {}
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+            }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+            }
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            unmuteRecognitionBeep()
+            restartWakeWordLoop()
         }
-        speechRecognizer?.startListening(intent)
     }
 
     private fun destroyRecognizer() {
@@ -291,7 +346,6 @@ class JarvisForegroundService : Service() {
         speechRecognizer = null
     }
 
-    // FIX: Google ka naya nakhra band karne ke liye Notification aur Alarm stream bhi Mute kar diye
     private fun muteRecognitionBeep() {
         if (beepMuted) return
         try {
